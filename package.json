@@ -1,0 +1,17 @@
+{
+  "name": "river-friends-holdem",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --port 8787",
+    "test": "node --test test/*.test.js",
+    "check": "node --check src/worker.js && node --check src/poker.js && node --check public/app.js && node --check public/guide.js",
+    "deploy": "wrangler deploy",
+    "deploy:check": "wrangler deploy --dry-run"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0",
+    "ws": "^8.22.0"
+  }
+}
