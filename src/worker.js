@@ -59,7 +59,7 @@ export default {
         const code = crypto.randomUUID().replaceAll('-', '').slice(0, 16);
         return env.ROOMS.getByName(code).fetch(new Request(`https://room/init`, {
           method: 'POST', headers: { 'x-player-id': id },
-          body: JSON.stringify({ id: code, name: cleanName(data.roomName, '친구들의 테이블'), nickname: cleanName(data.nickname, '플레이어'), memberKey: data.memberKey }),
+          body: JSON.stringify({ id: code, name: cleanName(data.roomName, `${new Date(Date.now() + 9 * 3600000).toISOString().slice(5, 10).split('-').map(Number).join('월 ')}일 테이블`), nickname: cleanName(data.nickname, '플레이어'), memberKey: data.memberKey }),
         }));
       }
       const match = url.pathname.match(/^\/api\/rooms\/([a-f0-9]{16})\/(join|socket|sync-ledger)$/);

@@ -208,7 +208,7 @@ function home() {
       <div class="form-title"><h2>${invited ? '친구의 테이블에 초대받았어요' : '테이블 열기'}</h2></div>
       <label for="member-select">이름 선택</label><select id="member-select" name="member" required></select>
       <div id="new-member-fields" hidden><label for="member-cohort">기수</label><input id="member-cohort" maxlength="20" placeholder="예: 9기"><label for="member-name">이름</label><input id="member-name" maxlength="20" placeholder="이름을 입력해 주세요"><button type="button" id="register-only" class="outline register-only">등록만 하기</button><p class="form-note">등록 후에도 테이블은 나중에 열 수 있어요.</p></div>
-      ${invited ? `<p class="invite-hint">초대 코드 <span>${escape(code)}</span></p>` : '<label for="room-name">테이블 이름</label><input id="room-name" name="roomName" maxlength="20" placeholder="금요일 밤의 홀덤" value="친구들의 테이블">'}
+      ${invited ? `<p class="invite-hint">초대 코드 <span>${escape(code)}</span></p>` : ''}
       <button class="primary large" id="entry-button">${invited ? '테이블 입장하기' : '새 테이블 만들기'} <span>→</span></button>
       ${invited ? '<a class="back-home" href="/">내 테이블 새로 만들기</a>' : ''}
     </form>
@@ -241,7 +241,7 @@ function home() {
       renderMemberOptions(); $('#member-select').value = String(members.findIndex(item => item.key === selectedMemberKey));
       $('#new-member-fields').hidden = true;
       saveLocal('river-nickname', nickname); saveLocal('river-member-key', selectedMemberKey);
-      const result = await api(code ? `/api/rooms/${code}/join` : '/api/rooms', { nickname, memberKey: selectedMemberKey, roomName: $('#room-name')?.value });
+      const result = await api(code ? `/api/rooms/${code}/join` : '/api/rooms', { nickname, memberKey: selectedMemberKey });
       code = result.code; history.replaceState({}, '', `/?room=${code}`); connect();
     } catch (error) { notify(error.message); button.disabled = false; button.textContent = $('#member-select').value === '__new__' ? '등록하고 입장하기 →' : invited ? '테이블 입장하기 →' : '새 테이블 만들기 →'; }
   });
