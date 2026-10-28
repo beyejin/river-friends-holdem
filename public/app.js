@@ -1,3 +1,5 @@
+import { raisePresets, raisePreview } from './betting.js';
+
 const $ = selector => document.querySelector(selector);
 const app = $('#app');
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -16,6 +18,10 @@ let renderedTurn = null, ledgerDraft = null, ledgerSavePending = null;
 // Server states are shown one at a time so bets, new cards and results stay readable.
 let stateQueue = [], queueTimer = null, animFrom = null, latestRoom = null;
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+let showBB = readLocal('river-show-bb', 'false') === 'true';
+let fourColour = readLocal('river-four-colour', 'false') === 'true';
+let animationSpeed = readLocal('river-animation-speed', 'normal');
+if (!['normal', 'fast', 'instant'].includes(animationSpeed)) animationSpeed = 'normal';
 let code = new URLSearchParams(location.search).get('room') || '';
 let nickname = readLocal('river-nickname', '');
 function readLocal(key, fallback) { try { return localStorage.getItem(key) || fallback; } catch { return fallback; } }
@@ -187,7 +193,10 @@ function card(value, extra = '') {
   if (value === undefined) return '<div class="card placeholder" aria-label="아직 공개되지 않은 카드">♧</div>';
   if (value === null) return '<div class="card back" aria-label="상대의 비공개 카드"><span>R</span></div>';
   const rank = value % 13 + 2, suit = Math.floor(value / 13);
-  return `<div class="card ${suit % 2 ? 'red' : ''} ${extra}" aria-label="${['스페이드', '하트', '클럽', '다이아몬드'][suit]} ${rank}"><b>${({ 11: 'J', 12: 'Q', 13: 'K', 14: 'A' })[rank] || rank}</b><span>${suits[suit]}</span></div>`;
+  return `<div class="card suit-${suit} ${suit % 2 ? 'red' : ''} ${extra}" aria-label="${['스페이드', '하트', '클럽', '다이아몬드'][suit]} ${rank}"><b>${({ 11: 'J', 12: 'Q', 13: 'K', 14: 'A' })[rank] || rank}</b><span>${suits[suit]}</span></div>`;
+}
+function tableAmount(value) {
+  return showBB ? `${(value / room.bigBlind).toLocaleString('ko-KR', { maximumFractionDigits: 2 })} BB` : format(value);
 }
 function notify(text) { $('#toast').textContent = text; $('#toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('#toast').hidden = true; }, 4500); }
 async function api(path, data, method = 'POST') {
@@ -317,11 +326,12 @@ function connect() {
 }
 function clearStateQueue() { stateQueue = []; clearTimeout(queueTimer); queueTimer = null; }
 function pacing(prev, next) {
-  if (!prev || reducedMotion.matches || prev.id !== next.id || prev.hand !== next.hand) return 0;
+  if (!prev || reducedMotion.matches || animationSpeed === 'instant' || prev.id !== next.id || prev.hand !== next.hand) return 0;
+  const scale = animationSpeed === 'fast' ? 0.5 : 1;
   const revealed = next.board.length - prev.board.length;
-  if (next.stage === 'finished' && prev.stage !== 'finished') return 2000 + Math.max(0, revealed) * 600;
-  if (revealed > 0) return 400 + revealed * 600;
-  return next.players.some(p => p.lastAction && p.lastAction !== prev.players.find(q => q.id === p.id)?.lastAction) ? 700 : 0;
+  if (next.stage === 'finished' && prev.stage !== 'finished') return (2000 + Math.max(0, revealed) * 600) * scale;
+  if (revealed > 0) return (400 + revealed * 600) * scale;
+  return next.players.some(p => p.lastAction && p.lastAction !== prev.players.find(q => q.id === p.id)?.lastAction) ? 700 * scale : 0;
 }
 function showNextState() {
   if (queueTimer || !stateQueue.length) return;
@@ -352,17 +362,21 @@ function send(type, data = {}) {
   pending = true; socket.send(JSON.stringify({ type, revision: (latestRoom || room).revision, ...data }));
   clearTimeout(replyTimer);
   replyTimer = setTimeout(() => { notify('응답이 늦어 다시 연결합니다. 행동 결과를 확인해 주세요.'); connect(); }, 8000);
-  document.querySelectorAll('[data-send], [data-action], #raise-button, [data-ledger-save]').forEach(el => { el.disabled = true; });
+  document.querySelectorAll('[data-send], [data-action], #raise-button, #raise-amount, [data-bet], [data-ledger-save]').forEach(el => { el.disabled = true; });
 }
 function seat(player, index) {
   if (!player) return `<div class="seat seat-${index} empty-seat"><span class="empty-avatar">+</span><span>친구의 자리</span></div>`;
   const me = player.id === room.me;
+  const playerIndex = room.players.indexOf(player);
+  const playing = !['waiting', 'finished'].includes(room.stage);
+  const positions = `${playerIndex === room.dealer ? '<span class="dealer-badge" title="딜러">D</span>' : ''}${playing && playerIndex === room.sb ? '<span class="blind-badge" title="스몰 블라인드">SB</span>' : ''}${playing && playerIndex === room.bb ? '<span class="blind-badge" title="빅 블라인드">BB</span>' : ''}`;
   const acted = animFrom && player.lastAction && player.lastAction !== animFrom.players.find(p => p.id === player.id)?.lastAction;
   const won = room.stage === 'finished' && room.result.some(r => r.id === player.id);
   return `<div class="seat seat-${index} ${me ? 'my-seat' : ''} ${room.turn === room.players.indexOf(player) ? 'active-seat' : ''} ${player.folded && player.active ? 'folded' : ''} ${acted ? 'acted' : ''} ${won ? 'winner' : ''} ${won && animFrom ? 'just-won' : ''}">
     <div class="seat-cards">${player.cards.map(c => card(c)).join('')}</div>
-    <div class="player-info"><span class="avatar">${escape([...player.name][0])}</span><div><b>${escape(player.name)}${me ? ' <small>나</small>' : ''}</b><span class="chips">${format(player.chips)}</span></div><span class="presence ${player.online ? 'online' : ''}" aria-label="${player.online ? '접속 중' : '연결 끊김'}"></span></div>
-    <div class="player-state">${room.players.indexOf(player) === room.dealer ? '<span class="dealer-badge">D</span>' : ''}${['waiting', 'finished'].includes(room.stage) ? (player.ready ? '준비 완료 ✓' : '대기 중') : escape(player.lastAction || (player.bet ? `베팅 ${format(player.bet)}` : ''))}</div>
+    <div class="player-info"><span class="avatar">${escape([...player.name][0])}</span><div><b>${escape(player.name)}${me ? ' <small>나</small>' : ''}</b><span class="chips" title="${format(player.chips)}칩">${tableAmount(player.chips)}</span></div><span class="presence ${player.online ? 'online' : ''}" aria-label="${player.online ? '접속 중' : '연결 끊김'}"></span></div>
+    <div class="player-state">${positions ? `<span class="seat-positions">${positions}</span>` : ''}${playing ? escape(player.lastAction || '') : (player.ready ? '준비 완료 ✓' : '대기 중')}</div>
+    ${playing && player.bet > 0 ? `<span class="seat-bet" aria-label="이번 라운드 총 베팅 ${format(player.bet)}칩">베팅 ${tableAmount(player.bet)}</span>` : ''}
   </div>`;
 }
 function readRoomLedgerDraft() {
@@ -376,11 +390,13 @@ function readRoomLedgerDraft() {
 function render(preserveLedgerDraft = true) {
   if (preserveLedgerDraft) ledgerDraft = readRoomLedgerDraft();
   const focused = app.contains(document.activeElement) ? document.activeElement : null;
-  const focusKey = focused?.id ? `#${focused.id}` : focused?.dataset.panel ? `[data-panel="${focused.dataset.panel}"]` : focused?.dataset.send ? `[data-send="${focused.dataset.send}"]` : focused?.dataset.action ? `[data-action="${focused.dataset.action}"]` : null;
+  const focusKey = focused?.id ? `#${focused.id}` : focused?.dataset.panel ? `[data-panel="${focused.dataset.panel}"]` : focused?.dataset.send ? `[data-send="${focused.dataset.send}"]` : focused?.dataset.action ? `[data-action="${focused.dataset.action}"]` : focused?.dataset.bet ? `[data-bet="${focused.dataset.bet}"]` : null;
   const turnKey = `${room.hand}:${room.stage}:${room.turn}:${room.bet}`;
-  const previousAmount = renderedTurn === turnKey ? $('#raise-amount')?.value : null;
+  const previousAmount = renderedTurn === turnKey ? $('#raise-amount')?.value ?? null : null;
+  const preferencesOpen = $('#display-preferences')?.open ?? false;
   renderedTurn = turnKey;
-  app.className = 'game';
+  app.className = `game${fourColour ? ' four-colour' : ''}`;
+  app.dataset.animation = animationSpeed;
   document.body.classList.add('in-game');
   const me = room.players.find(p => p.id === room.me);
   const idle = ['waiting', 'finished'].includes(room.stage);
@@ -391,14 +407,23 @@ function render(preserveLedgerDraft = true) {
   const ordered = ownIndex >= 0 ? [...room.players.slice(ownIndex), ...room.players.slice(0, ownIndex)] : room.players;
   const disabled = connected && !pending ? '' : 'disabled';
   app.innerHTML = `<section class="table-heading"><div><div class="eyebrow"><span class="connection ${connected ? '' : 'disconnected'}">${connected ? '실시간 연결됨' : '다시 연결하는 중…'}</span></div><h1>${escape(room.name)}</h1></div><div class="table-tools"><button class="outline" id="invite-button" aria-haspopup="dialog">친구 초대 <span>↗</span></button><button class="quiet" data-send="leave" ${!idle ? 'disabled' : disabled} title="핸드가 끝난 뒤 나갈 수 있어요">나가기</button></div></section>
+    <details id="display-preferences" class="display-preferences"><summary id="display-preferences-summary">화면 설정</summary><section class="display-options" aria-label="플레이 화면 설정"><label><input type="checkbox" id="show-bb" ${showBB ? 'checked' : ''}> BB 단위로 보기</label><label><input type="checkbox" id="four-colour" ${fourColour ? 'checked' : ''}> 4색 카드</label><label for="animation-speed">애니메이션 <select id="animation-speed">${[['normal', '보통'], ['fast', '빠르게'], ['instant', '즉시']].map(([value, label]) => `<option value="${value}" ${animationSpeed === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label></section><p>1 BB = ${format(room.bigBlind)}칩 · 베팅 입력과 행동 버튼은 항상 칩 단위예요. 설정은 이 브라우저에 저장돼요.</p></details>
     <div class="game-layout"><section class="play-area"><div class="table-meta"><span>블라인드 <b>${room.smallBlind} / ${room.bigBlind}</b></span><span>핸드 <b>${String(room.hand).padStart(2, '0')}</b></span></div>
       <div class="poker-surface"><div class="felt"><div class="felt-border"></div><span class="felt-wordmark">RIVER</span></div>
-        <div class="board-area"><div class="round-label">${stages[room.stage]}</div>${idle && room.stage === 'waiting' ? '<div class="waiting-title">자리가 준비됐어요.</div><p class="waiting-description">초대 링크를 보내고<br>친구와 함께 준비를 눌러주세요.</p>' : `<div class="pot-label">TOTAL POT <strong>${format(room.pot)}</strong></div><div class="board-cards">${Array.from({ length: 5 }, (_, i) => card(room.board[i], animFrom && i >= animFrom.board.length ? `reveal reveal-${i - animFrom.board.length}` : '')).join('')}</div>`}</div>
+        <div class="board-area"><div class="round-label">${stages[room.stage]}</div>${idle && room.stage === 'waiting' ? '<div class="waiting-title">자리가 준비됐어요.</div><p class="waiting-description">초대 링크를 보내고<br>친구와 함께 준비를 눌러주세요.</p>' : `<div class="pot-label">TOTAL POT <strong title="${format(room.pot)}칩">${tableAmount(room.pot)}</strong></div><div class="board-cards">${Array.from({ length: 5 }, (_, i) => card(room.board[i], animFrom && i >= animFrom.board.length ? `reveal reveal-${i - animFrom.board.length}` : '')).join('')}</div>`}</div>
         ${ordered.map((player, i) => seat(player, i)).join('')}
       </div>
-      <section class="action-panel" aria-label="게임 행동">${idle ? `<div class="turn-info"><span class="turn-dot"></span><div><b>${room.stage === 'finished' ? room.result.map(r => `${escape(r.name)} +${format(r.amount)}`).join(' / ') : '친구가 모이면 시작해요'}</b><span>${room.stage === 'finished' ? room.result.map(r => escape(r.handName)).join(' / ') + ' — 다음 핸드를 위해 준비를 눌러주세요.' : `${room.players.filter(p => p.ready).length}명 준비 완료 / 최소 2명 필요`}</span></div></div><div class="lobby-actions">${me?.chips === 0 ? `<button class="primary" data-send="rebuy" ${disabled}>가상 칩 30,000 충전</button>` : `<button class="${me?.ready ? 'outline' : 'primary'}" data-send="ready" ${disabled}>${me?.ready ? '준비 취소' : '준비하기'}</button>`}${host ? `<button class="primary gold" data-send="start" ${room.players.filter(p => p.ready && p.online).length < 2 ? 'disabled' : disabled}>${room.hand ? '다음 핸드' : '첫 핸드 시작'} →</button>` : !room.players.find(p => p.id === room.hostId)?.online ? `<button class="outline" data-send="claimHost" ${disabled}>방장 맡기</button>` : '<span class="waiting-host">방장이 핸드를 시작해요</span>'}</div>` : `<div class="turn-info"><span class="turn-dot ${legal ? 'your-turn' : ''}"></span><div><b>${legal ? '내 차례예요.' : `${escape(room.players[room.turn]?.name || '')} 님의 차례`}</b><span>${legal ? '어떤 플레이를 할까요?' : '다음 수를 생각해 보세요.'}</span></div><span class="timer" id="countdown"></span></div><div class="betting-actions"><button class="fold-button" data-action="fold" ${legal ? disabled : 'disabled'}>폴드</button><button class="primary" data-action="${legal?.canCheck ? 'check' : 'call'}" ${legal ? disabled : 'disabled'}>${!legal ? '콜' : legal.canCheck ? '체크' : `콜 ${format(legal.toCall)}`}</button><div class="raise-control"><label for="raise-amount">총 베팅액</label><input id="raise-amount" type="number" inputmode="numeric" required min="${legal?.min || 0}" max="${legal?.max || 0}" step="1" value="${legal?.min || 0}" ${legal?.canRaise ? disabled : 'disabled'}></div><button class="primary gold" id="raise-button" ${legal?.canRaise ? disabled : 'disabled'}>레이즈 ↑</button></div>${legal?.canRaise ? `<div class="quick-bets"><span>빠른 선택</span><button data-bet="${legal.min}">최소 ${format(legal.min)}</button><button data-bet="${Math.min(legal.max, Math.max(legal.min, Math.round(room.pot / 2) + room.bet))}">½ 팟</button><button data-bet="${legal.max}">올인 ${format(legal.max)}</button></div>` : ''}`}</section>
+      <section class="action-panel" aria-label="게임 행동">${idle ? `<div class="turn-info"><span class="turn-dot"></span><div><b>${room.stage === 'finished' ? room.result.map(r => `${escape(r.name)} +${format(r.amount)}`).join(' / ') : '친구가 모이면 시작해요'}</b><span>${room.stage === 'finished' ? room.result.map(r => escape(r.handName)).join(' / ') + ' — 다음 핸드를 위해 준비를 눌러주세요.' : `${room.players.filter(p => p.ready).length}명 준비 완료 / 최소 2명 필요`}</span></div></div><div class="lobby-actions">${me?.chips === 0 ? `<button class="primary" data-send="rebuy" ${disabled}>가상 칩 30,000 충전</button>` : `<button class="${me?.ready ? 'outline' : 'primary'}" data-send="ready" ${disabled}>${me?.ready ? '준비 취소' : '준비하기'}</button>`}${host ? `<button class="primary gold" data-send="start" ${room.players.filter(p => p.ready && p.online).length < 2 ? 'disabled' : disabled}>${room.hand ? '다음 핸드' : '첫 핸드 시작'} →</button>` : !room.players.find(p => p.id === room.hostId)?.online ? `<button class="outline" data-send="claimHost" ${disabled}>방장 맡기</button>` : '<span class="waiting-host">방장이 핸드를 시작해요</span>'}</div>` : `<div class="turn-info"><span class="turn-dot ${legal ? 'your-turn' : ''}"></span><div><b>${legal ? '내 차례예요.' : `${escape(room.players[room.turn]?.name || '')} 님의 차례`}</b><span>${legal ? '어떤 플레이를 할까요?' : '다음 수를 생각해 보세요.'}</span></div><span class="timer" id="countdown"></span></div><div class="betting-actions"><button class="fold-button" data-action="fold" ${legal ? disabled : 'disabled'}>폴드</button><button class="primary" data-action="${legal?.canCheck ? 'check' : 'call'}" ${legal ? disabled : 'disabled'}>${!legal ? '콜' : legal.canCheck ? '체크' : `콜 ${format(legal.toCall)}칩`}</button><div class="raise-control"><label for="raise-amount">총 베팅액 (칩)</label><input id="raise-amount" type="number" inputmode="numeric" aria-describedby="raise-preview raise-help" required min="${legal?.min || 0}" max="${legal?.max || 0}" step="1" value="${legal?.min || 0}" ${legal?.canRaise ? disabled : 'disabled'}></div><button class="primary gold" id="raise-button" ${legal?.canRaise ? disabled : 'disabled'}>레이즈 ↑</button></div>${legal?.canRaise ? `<output id="raise-preview" class="raise-preview" for="raise-amount" aria-live="polite"></output><section class="quick-bets" aria-label="베팅 금액 빠른 선택">${raisePresets(room, legal).map((preset, index) => `<button type="button" id="bet-preset-${index}" data-bet="${preset.amount}" ${disabled} title="이번 라운드 총액 ${format(preset.amount)}칩">${preset.label} <b>${format(preset.amount)}</b></button>`).join('')}</section><p id="raise-help" class="raise-help">총액에는 이미 낸 칩이 포함돼요. ½ 팟·팟은 콜을 마친 뒤의 팟을 기준으로 올리며, 가능한 범위 안에서 선택돼요. Enter로 확인 · Esc로 최소 금액 복귀</p>` : ''}`}</section>
       <p class="table-footnote">30,000 가상 칩으로 시작 / 블라인드 150 / 300 / 행동 시간 45초 / 결제 및 환전 없음</p>
     </section><aside class="sidebar"><div class="side-tabs" role="tablist" aria-label="테이블 정보"><button role="tab" id="tab-ranking" aria-controls="side-content" tabindex="${panel === 'ranking' ? 0 : -1}" aria-selected="${panel === 'ranking'}" data-panel="ranking">리더보드</button><button role="tab" id="tab-history" aria-controls="side-content" tabindex="${panel === 'history' ? 0 : -1}" aria-selected="${panel === 'history'}" data-panel="history">핸드 기록</button><button role="tab" id="tab-ledger" aria-controls="side-content" tabindex="${panel === 'ledger' ? 0 : -1}" aria-selected="${panel === 'ledger'}" data-panel="ledger">주간 기록</button><button role="tab" id="tab-log" aria-controls="side-content" tabindex="${panel === 'log' ? 0 : -1}" aria-selected="${panel === 'log'}" data-panel="log">진행 로그</button></div><div id="side-content" role="tabpanel" tabindex="0" aria-labelledby="tab-${panel}">${sideContent()}</div></aside></div>`;
+  $('#display-preferences').open = preferencesOpen;
+  $('#show-bb').onchange = event => { showBB = event.target.checked; saveLocal('river-show-bb', String(showBB)); render(); };
+  $('#four-colour').onchange = event => { fourColour = event.target.checked; saveLocal('river-four-colour', String(fourColour)); render(); };
+  $('#animation-speed').onchange = event => {
+    animationSpeed = event.target.value; saveLocal('river-animation-speed', animationSpeed);
+    clearTimeout(queueTimer); queueTimer = null;
+    if (stateQueue.length) showNextState(); else render();
+  };
   const ledgerForm = $('[data-ledger-form]');
   if (ledgerDraft && ledgerForm) {
     ledgerForm.querySelector('[data-ledger-date]').value = ledgerDraft.date;
@@ -448,9 +473,37 @@ function render(preserveLedgerDraft = true) {
     const blob = new Blob([JSON.stringify({ version: 1, room: room.name, exportedAt: new Date().toISOString(), sessions: room.ledger }, null, 2)], { type: 'application/json' });
     const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = `river-chip-ledger-${room.id}.json`; link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 1000);
   });
-  document.querySelectorAll('[data-bet]').forEach(button => { button.onclick = () => { $('#raise-amount').value = button.dataset.bet; }; });
-  if ($('#raise-button')) $('#raise-button').onclick = () => { if ($('#raise-amount').reportValidity() && confirmAction('raise', Number($('#raise-amount').value))) send('action', { action: 'raise', amount: Number($('#raise-amount').value) }); };
-  if (previousAmount !== null && legal?.canRaise) $('#raise-amount').value = previousAmount;
+  if (legal?.canRaise) {
+    const input = $('#raise-amount'), preview = $('#raise-preview');
+    if (previousAmount !== null) input.value = previousAmount;
+    const updatePreview = () => {
+      const result = raisePreview(input.value, me, legal, room.bigBlind);
+      input.setAttribute('aria-invalid', String(!result));
+      preview.classList.toggle('invalid', !result);
+      if (!result) preview.textContent = `${format(legal.min)}~${format(legal.max)} 사이의 정수 칩을 입력해 주세요.`;
+      else preview.innerHTML = `<span>추가 투입 <b>${format(result.additional)}</b></span><span>남은 칩 <b>${format(result.remaining)}</b></span><span>총액 <b>${result.bigBlinds.toLocaleString('ko-KR', { maximumFractionDigits: 2 })} BB</b></span>`;
+      return result;
+    };
+    input.oninput = updatePreview;
+    document.querySelectorAll('[data-bet]').forEach(button => {
+      button.onclick = () => {
+        if (!connected || pending || input.disabled) return;
+        input.value = button.dataset.bet;
+        updatePreview();
+      };
+    });
+    $('#raise-button').onclick = () => {
+      if (!connected || pending || input.disabled) return;
+      const valid = updatePreview();
+      if (input.reportValidity() && valid && confirmAction('raise', Number(input.value))) send('action', { action: 'raise', amount: Number(input.value) });
+    };
+    input.onkeydown = event => {
+      if (event.isComposing || !connected || pending || input.disabled) return;
+      if (event.key === 'Enter') { event.preventDefault(); if (!event.repeat) $('#raise-button').click(); }
+      if (event.key === 'Escape') { event.preventDefault(); input.value = legal.min; updatePreview(); }
+    };
+    updatePreview();
+  }
   if (focusKey) $(focusKey)?.focus({ preventScroll: true });
   const announcement = !connected ? '서버에 다시 연결하는 중입니다.' : legal ? '내 차례입니다.' : idle ? stages[room.stage] : `${room.players[room.turn]?.name || ''} 님의 차례입니다.`;
   if ($('#turn-announcement').textContent !== announcement) $('#turn-announcement').textContent = announcement;

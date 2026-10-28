@@ -390,11 +390,11 @@ button{font-size:15px}
 /* Paced table events: new board cards, the latest action and the hand winner. */
 @keyframes card-reveal{from{opacity:0;transform:translateY(-8px) rotateY(80deg)}to{opacity:1;transform:none}}
 @keyframes seat-pulse{0%{transform:scale(1)}40%{transform:scale(1.06)}100%{transform:scale(1)}}
-.board-cards .card.reveal{animation:card-reveal .45s ease-out both}
-.board-cards .card.reveal-1{animation-delay:.6s}.board-cards .card.reveal-2{animation-delay:1.2s}.board-cards .card.reveal-3{animation-delay:1.8s}.board-cards .card.reveal-4{animation-delay:2.4s}
-.seat.acted .player-state{animation:seat-pulse .5s ease-out}
+.board-cards .card.reveal{animation:card-reveal calc(.45s * var(--motion-scale,1)) ease-out both}
+.board-cards .card.reveal-1{animation-delay:calc(.6s * var(--motion-scale,1))}.board-cards .card.reveal-2{animation-delay:calc(1.2s * var(--motion-scale,1))}.board-cards .card.reveal-3{animation-delay:calc(1.8s * var(--motion-scale,1))}.board-cards .card.reveal-4{animation-delay:calc(2.4s * var(--motion-scale,1))}
+.seat.acted .player-state{animation:seat-pulse calc(.5s * var(--motion-scale,1)) ease-out}
 .seat.winner .player-info{outline:3px solid var(--brass);outline-offset:3px;background:var(--surface)}
-.seat.just-won .player-info{animation:seat-pulse .7s ease-out 2}
+.seat.just-won .player-info{animation:seat-pulse calc(.7s * var(--motion-scale,1)) ease-out 2}
 @media(prefers-reduced-motion:reduce){.board-cards .card.reveal,.seat.acted .player-state,.seat.just-won .player-info{animation:none}}
 
 /* Casino theme: deep green room, ivory cards and one brass accent. */
@@ -457,3 +457,44 @@ dialog p,#guide p,#guide .steps{color:var(--text-muted)}
 @media(min-width:600px) and (max-width:960px) and (max-height:500px) and (orientation:landscape){.poker-surface{grid-template-rows:142px;grid-auto-rows:minmax(96px,auto)}}
 /* Custom select arrow: inset from the edge, text aligned with the inputs. */
 select,.entry-form select{appearance:none;-webkit-appearance:none;padding-left:12px;padding-right:44px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%23bac6b6' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 16px center;background-size:12px 8px}
+
+/* Betting totals and seat commitments remain visible before an action is sent. */
+.raise-preview{display:flex;flex-wrap:wrap;gap:.6rem 1.5rem;margin-top:1rem;padding:.8rem 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);color:var(--text-muted);font-size:.8rem}
+.raise-preview>span{display:flex;align-items:baseline;gap:.5rem}
+.raise-preview b{color:var(--text);font-size:1rem;font-variant-numeric:tabular-nums}
+.raise-preview.invalid{color:var(--danger)}
+.quick-bets button b{margin-left:.3rem;font-variant-numeric:tabular-nums}
+.raise-help{margin:.65rem 0 0;font-size:.75rem;line-height:1.6;color:var(--text-muted)}
+.seat .player-state{display:flex;justify-content:center;align-items:center;flex-wrap:wrap;gap:.25rem;height:auto;min-height:1.25rem;line-height:1.4;white-space:normal}
+.seat-positions{display:inline-flex;gap:.2rem;align-items:center}
+.seat-positions .dealer-badge,.blind-badge{display:inline-grid;place-items:center;min-width:1.3rem;height:1.3rem;padding:0 .2rem;margin:0;border-radius:.25rem;font:600 .65rem/1 "Pretendard Variable",sans-serif}
+.blind-badge{background:var(--brass);color:var(--on-brass)}
+.seat-bet{display:block;margin-top:.2rem;min-height:1.2em;font-size:.75rem;line-height:1.4;color:var(--brass-light);font-variant-numeric:tabular-nums}
+@media(min-width:681px) and (min-height:501px){.seat-0{top:86%}}
+@media(max-width:680px){
+  .raise-preview{gap:.5rem 1rem;font-size:.75rem}
+  .raise-preview b{font-size:.9rem}
+  .quick-bets{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+  .quick-bets>span{grid-column:1/-1;text-align:left}
+  .quick-bets button{width:100%;font-size:.8rem}
+  .seat .player-state{font-size:.65rem}
+  .seat-bet{font-size:.65rem}
+}
+
+/* Personal display choices never change chip values sent to the server. */
+.display-preferences{margin:0 0 1rem;border:1px solid var(--line);border-radius:.5rem;padding:0 1rem;background:var(--surface)}
+.display-preferences summary{min-height:44px;padding:.75rem 0;cursor:pointer;font-weight:650;font-size:.85rem}
+.display-preferences summary:focus-visible{outline:2px solid var(--brass);outline-offset:2px}
+.display-options{display:flex;align-items:center;flex-wrap:wrap;gap:.5rem 1.5rem}
+.display-options label{display:flex;align-items:center;gap:.5rem;min-height:44px;font-size:.85rem}
+.display-options input{width:1.2rem;height:1.2rem;min-height:0;accent-color:var(--brass)}
+.display-options select{min-height:44px;max-width:100%;background-color:var(--surface-2);color:var(--text);border:1px solid var(--line);border-radius:.4rem;font:inherit}
+.display-preferences p{margin:.5rem 0 .75rem;color:var(--text-muted);font-size:.75rem}
+.four-colour{--card-club:#14723d;--card-diamond:#1c59ad}
+.four-colour .card.suit-2{color:var(--card-club)}
+.four-colour .card.suit-3{color:var(--card-diamond)}
+.four-colour .card b{font-weight:700}
+.game[data-animation=fast]{--motion-scale:.5}
+.game[data-animation=instant] .card.reveal,.game[data-animation=instant] .seat.acted .player-state,.game[data-animation=instant] .seat.just-won .player-info{animation:none}
+@media(max-width:680px){.display-options{gap:0 .75rem}.display-options label:last-child{width:100%}.display-options select{flex:1}}
+@media(forced-colors:active){.four-colour .card.suit-2,.four-colour .card.suit-3{color:CanvasText}}
