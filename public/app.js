@@ -21,6 +21,8 @@ const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 let showBB = readLocal('river-show-bb', 'false') === 'true';
 let fourColour = readLocal('river-four-colour', 'false') === 'true';
 let animationSpeed = readLocal('river-animation-speed', 'normal');
+let showQueue = readLocal('river-show-queue', 'true') === 'true';
+let openHands = new Set();
 if (!['normal', 'fast', 'instant'].includes(animationSpeed)) animationSpeed = 'normal';
 let code = new URLSearchParams(location.search).get('room') || '';
 let nickname = readLocal('river-nickname', '');
@@ -191,7 +193,7 @@ function renderHomeLeaderboard(preserveDraft = true) {
 }
 function card(value, extra = '') {
   if (value === undefined) return '<div class="card placeholder" aria-label="아직 공개되지 않은 카드">♧</div>';
-  if (value === null) return '<div class="card back" aria-label="상대의 비공개 카드"><span>R</span></div>';
+  if (value === null) return '<div class="card back" aria-label="상대의 비공개 카드"><span>♠</span></div>';
   const rank = value % 13 + 2, suit = Math.floor(value / 13);
   return `<div class="card suit-${suit} ${suit % 2 ? 'red' : ''} ${extra}" aria-label="${['스페이드', '하트', '클럽', '다이아몬드'][suit]} ${rank}"><b>${({ 11: 'J', 12: 'Q', 13: 'K', 14: 'A' })[rank] || rank}</b><span>${suits[suit]}</span></div>`;
 }
@@ -362,9 +364,27 @@ function send(type, data = {}) {
   pending = true; socket.send(JSON.stringify({ type, revision: (latestRoom || room).revision, ...data }));
   clearTimeout(replyTimer);
   replyTimer = setTimeout(() => { notify('응답이 늦어 다시 연결합니다. 행동 결과를 확인해 주세요.'); connect(); }, 8000);
-  document.querySelectorAll('[data-send], [data-action], #raise-button, #raise-amount, [data-bet], [data-ledger-save]').forEach(el => { el.disabled = true; });
+  document.querySelectorAll('[data-send], [data-action], [data-queue], #raise-button, #raise-amount, [data-bet], [data-ledger-save]').forEach(el => { el.disabled = true; });
 }
-function seat(player, index) {
+// Seats sit evenly on an ellipse, starting with this player at the bottom and moving clockwise.
+function seatPosition(index, count) {
+  const angle = Math.PI / 2 + index * 2 * Math.PI / Math.max(count, 2);
+  const x = 50 + 41 * Math.cos(angle), y = 50 + 36 * Math.sin(angle);
+  const toward = (value, factor) => `${(value + (50 - value) * factor).toFixed(2)}%`;
+  return { '--sx': `${x.toFixed(2)}%`, '--sy': `${y.toFixed(2)}%`, '--bx': toward(x, 0.4), '--by': toward(y, 0.44) };
+}
+function queuePanel(me) {
+  const toCall = Math.min(Math.max(0, room.bet - me.bet), me.chips);
+  const queued = room.queued;
+  const options = [['checkFold', '체크/폴드'], toCall ? ['call', `콜 ${format(toCall)}`] : ['check', '체크'], ['fold', '폴드']];
+  const stale = queued?.type === 'call' && queued.cap !== toCall;
+  const disabled = connected && !pending ? '' : 'disabled';
+  return `<section class="queue-panel" aria-label="내 차례 전에 미리 선택">
+    <div class="queue-options">${options.map(([type, label]) => `<button type="button" class="queue-option ${type === 'fold' ? 'queue-fold' : ''}" data-queue="${type}" aria-pressed="${queued?.type === type}" ${disabled}>${label}</button>`).join('')}</div>
+    <p class="queue-note" aria-live="polite">${stale ? '콜 금액이 바뀌어 차례가 오면 예약이 취소돼요.' : queued ? '내 차례가 오면 바로 실행돼요. 한 번 더 누르면 취소돼요.' : '미리 골라두면 내 차례에 자동으로 실행되고, 이번 베팅 라운드가 끝나면 사라져요.'}</p>
+  </section>`;
+}
+function seat(player, index, count) {
   if (!player) return `<div class="seat seat-${index} empty-seat"><span class="empty-avatar">+</span><span>친구의 자리</span></div>`;
   const me = player.id === room.me;
   const playerIndex = room.players.indexOf(player);
@@ -372,7 +392,7 @@ function seat(player, index) {
   const positions = `${playerIndex === room.dealer ? '<span class="dealer-badge" title="딜러">D</span>' : ''}${playing && playerIndex === room.sb ? '<span class="blind-badge" title="스몰 블라인드">SB</span>' : ''}${playing && playerIndex === room.bb ? '<span class="blind-badge" title="빅 블라인드">BB</span>' : ''}`;
   const acted = animFrom && player.lastAction && player.lastAction !== animFrom.players.find(p => p.id === player.id)?.lastAction;
   const won = room.stage === 'finished' && room.result.some(r => r.id === player.id);
-  return `<div class="seat seat-${index} ${me ? 'my-seat' : ''} ${room.turn === room.players.indexOf(player) ? 'active-seat' : ''} ${player.folded && player.active ? 'folded' : ''} ${acted ? 'acted' : ''} ${won ? 'winner' : ''} ${won && animFrom ? 'just-won' : ''}">
+  return `${playing && player.bet > 0 ? `<span class="table-bet" data-seat-pos="${index},${count}" aria-hidden="true"><i></i>${tableAmount(player.bet)}</span>` : ''}<div data-seat-pos="${index},${count}" class="seat seat-${index} ${me ? 'my-seat' : ''} ${room.turn === room.players.indexOf(player) ? 'active-seat' : ''} ${player.folded && player.active ? 'folded' : ''} ${acted ? 'acted' : ''} ${won ? 'winner' : ''} ${won && animFrom ? 'just-won' : ''}">
     <div class="seat-cards">${player.cards.map(c => card(c)).join('')}</div>
     <div class="player-info"><span class="avatar">${escape([...player.name][0])}</span><div><b>${escape(player.name)}${me ? ' <small>나</small>' : ''}</b><span class="chips" title="${format(player.chips)}칩">${tableAmount(player.chips)}</span></div><span class="presence ${player.online ? 'online' : ''}" aria-label="${player.online ? '접속 중' : '연결 끊김'}"></span></div>
     <div class="player-state">${positions ? `<span class="seat-positions">${positions}</span>` : ''}${playing ? escape(player.lastAction || '') : (player.ready ? '준비 완료 ✓' : '대기 중')}</div>
@@ -394,6 +414,7 @@ function render(preserveLedgerDraft = true) {
   const turnKey = `${room.hand}:${room.stage}:${room.turn}:${room.bet}`;
   const previousAmount = renderedTurn === turnKey ? $('#raise-amount')?.value ?? null : null;
   const preferencesOpen = $('#display-preferences')?.open ?? false;
+  if (panel === 'history') openHands = new Set([...document.querySelectorAll('details.history-entry[open]')].map(d => d.dataset.hand));
   renderedTurn = turnKey;
   app.className = `game${fourColour ? ' four-colour' : ''}`;
   app.dataset.animation = animationSpeed;
@@ -402,23 +423,33 @@ function render(preserveLedgerDraft = true) {
   const idle = ['waiting', 'finished'].includes(room.stage);
   const host = room.hostId === room.me;
   const legal = room.legal;
+  const canQueue = showQueue && me?.active && !me.folded && me.chips > 0;
   // Rotate seats so this player is always at the bottom of the table.
   const ownIndex = room.players.findIndex(p => p.id === room.me);
   const ordered = ownIndex >= 0 ? [...room.players.slice(ownIndex), ...room.players.slice(0, ownIndex)] : room.players;
   const disabled = connected && !pending ? '' : 'disabled';
   app.innerHTML = `<section class="table-heading"><div><div class="eyebrow"><span class="connection ${connected ? '' : 'disconnected'}">${connected ? '실시간 연결됨' : '다시 연결하는 중…'}</span></div><h1>${escape(room.name)}</h1></div><div class="table-tools"><button class="outline" id="invite-button" aria-haspopup="dialog">친구 초대 <span>↗</span></button><button class="quiet" data-send="leave" ${!idle ? 'disabled' : disabled} title="핸드가 끝난 뒤 나갈 수 있어요">나가기</button></div></section>
-    <details id="display-preferences" class="display-preferences"><summary id="display-preferences-summary">화면 설정</summary><section class="display-options" aria-label="플레이 화면 설정"><label><input type="checkbox" id="show-bb" ${showBB ? 'checked' : ''}> BB 단위로 보기</label><label><input type="checkbox" id="four-colour" ${fourColour ? 'checked' : ''}> 4색 카드</label><label for="animation-speed">애니메이션 <select id="animation-speed">${[['normal', '보통'], ['fast', '빠르게'], ['instant', '즉시']].map(([value, label]) => `<option value="${value}" ${animationSpeed === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label></section><p>1 BB = ${format(room.bigBlind)}칩 · 베팅 입력과 행동 버튼은 항상 칩 단위예요. 설정은 이 브라우저에 저장돼요.</p></details>
+    <details id="display-preferences" class="display-preferences"><summary id="display-preferences-summary">화면 설정</summary><section class="display-options" aria-label="플레이 화면 설정"><label><input type="checkbox" id="show-bb" ${showBB ? 'checked' : ''}> BB 단위로 보기</label><label><input type="checkbox" id="four-colour" ${fourColour ? 'checked' : ''}> 4색 카드</label><label><input type="checkbox" id="show-queue" ${showQueue ? 'checked' : ''}> 미리 선택 버튼</label><label for="animation-speed">애니메이션 <select id="animation-speed">${[['normal', '보통'], ['fast', '빠르게'], ['instant', '즉시']].map(([value, label]) => `<option value="${value}" ${animationSpeed === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label></section><p>1 BB = ${format(room.bigBlind)}칩 · 베팅 입력과 행동 버튼은 항상 칩 단위예요. 설정은 이 브라우저에 저장돼요.</p></details>
     <div class="game-layout"><section class="play-area"><div class="table-meta"><span>블라인드 <b>${room.smallBlind} / ${room.bigBlind}</b></span><span>핸드 <b>${String(room.hand).padStart(2, '0')}</b></span></div>
       <div class="poker-surface"><div class="felt"><div class="felt-border"></div><span class="felt-wordmark">RIVER</span></div>
         <div class="board-area"><div class="round-label">${stages[room.stage]}</div>${idle && room.stage === 'waiting' ? '<div class="waiting-title">자리가 준비됐어요.</div><p class="waiting-description">초대 링크를 보내고<br>친구와 함께 준비를 눌러주세요.</p>' : `<div class="pot-label">TOTAL POT <strong title="${format(room.pot)}칩">${tableAmount(room.pot)}</strong></div><div class="board-cards">${Array.from({ length: 5 }, (_, i) => card(room.board[i], animFrom && i >= animFrom.board.length ? `reveal reveal-${i - animFrom.board.length}` : '')).join('')}</div>`}</div>
-        ${ordered.map((player, i) => seat(player, i)).join('')}
+        ${ordered.map((player, i) => seat(player, i, ordered.length)).join('')}
       </div>
-      <section class="action-panel" aria-label="게임 행동">${idle ? `<div class="turn-info"><span class="turn-dot"></span><div><b>${room.stage === 'finished' ? room.result.map(r => `${escape(r.name)} +${format(r.amount)}`).join(' / ') : '친구가 모이면 시작해요'}</b><span>${room.stage === 'finished' ? room.result.map(r => escape(r.handName)).join(' / ') + ' — 다음 핸드를 위해 준비를 눌러주세요.' : `${room.players.filter(p => p.ready).length}명 준비 완료 / 최소 2명 필요`}</span></div></div><div class="lobby-actions">${me?.chips === 0 ? `<button class="primary" data-send="rebuy" ${disabled}>가상 칩 30,000 충전</button>` : `<button class="${me?.ready ? 'outline' : 'primary'}" data-send="ready" ${disabled}>${me?.ready ? '준비 취소' : '준비하기'}</button>`}${host ? `<button class="primary gold" data-send="start" ${room.players.filter(p => p.ready && p.online).length < 2 ? 'disabled' : disabled}>${room.hand ? '다음 핸드' : '첫 핸드 시작'} →</button>` : !room.players.find(p => p.id === room.hostId)?.online ? `<button class="outline" data-send="claimHost" ${disabled}>방장 맡기</button>` : '<span class="waiting-host">방장이 핸드를 시작해요</span>'}</div>` : `<div class="turn-info"><span class="turn-dot ${legal ? 'your-turn' : ''}"></span><div><b>${legal ? '내 차례예요.' : `${escape(room.players[room.turn]?.name || '')} 님의 차례`}</b><span>${legal ? '어떤 플레이를 할까요?' : '다음 수를 생각해 보세요.'}</span></div><span class="timer" id="countdown"></span></div><div class="betting-actions"><button class="fold-button" data-action="fold" ${legal ? disabled : 'disabled'}>폴드</button><button class="primary" data-action="${legal?.canCheck ? 'check' : 'call'}" ${legal ? disabled : 'disabled'}>${!legal ? '콜' : legal.canCheck ? '체크' : `콜 ${format(legal.toCall)}칩`}</button><div class="raise-control"><label for="raise-amount">총 베팅액 (칩)</label><input id="raise-amount" type="number" inputmode="numeric" aria-describedby="raise-preview raise-help" required min="${legal?.min || 0}" max="${legal?.max || 0}" step="1" value="${legal?.min || 0}" ${legal?.canRaise ? disabled : 'disabled'}></div><button class="primary gold" id="raise-button" ${legal?.canRaise ? disabled : 'disabled'}>레이즈 ↑</button></div>${legal?.canRaise ? `<output id="raise-preview" class="raise-preview" for="raise-amount" aria-live="polite"></output><section class="quick-bets" aria-label="베팅 금액 빠른 선택">${raisePresets(room, legal).map((preset, index) => `<button type="button" id="bet-preset-${index}" data-bet="${preset.amount}" ${disabled} title="이번 라운드 총액 ${format(preset.amount)}칩">${preset.label} <b>${format(preset.amount)}</b></button>`).join('')}</section><p id="raise-help" class="raise-help">총액에는 이미 낸 칩이 포함돼요. ½ 팟·팟은 콜을 마친 뒤의 팟을 기준으로 올리며, 가능한 범위 안에서 선택돼요. Enter로 확인 · Esc로 최소 금액 복귀</p>` : ''}`}</section>
+      <section class="action-panel" aria-label="게임 행동">${idle ? `<div class="turn-info"><span class="turn-dot"></span><div><b>${room.stage === 'finished' ? room.result.map(r => `${escape(r.name)} +${format(r.amount)}`).join(' / ') : '친구가 모이면 시작해요'}</b><span>${room.stage === 'finished' ? room.result.map(r => escape(r.handName)).join(' / ') + ' — 다음 핸드를 위해 준비를 눌러주세요.' : `${room.players.filter(p => p.ready).length}명 준비 완료 / 최소 2명 필요`}</span></div></div><div class="lobby-actions">${me?.chips === 0 ? `<button class="primary" data-send="rebuy" ${disabled}>가상 칩 30,000 충전</button>` : `<button class="${me?.ready ? 'outline' : 'primary'}" data-send="ready" ${disabled}>${me?.ready ? '준비 취소' : '준비하기'}</button>`}${host ? `<button class="primary gold" data-send="start" ${room.players.filter(p => p.ready && p.online).length < 2 ? 'disabled' : disabled}>${room.hand ? '다음 핸드' : '첫 핸드 시작'} →</button>` : !room.players.find(p => p.id === room.hostId)?.online ? `<button class="outline" data-send="claimHost" ${disabled}>방장 맡기</button>` : '<span class="waiting-host">방장이 핸드를 시작해요</span>'}</div>` : `<div class="turn-info"><span class="turn-dot ${legal ? 'your-turn' : ''}"></span><div><b>${legal ? '내 차례예요.' : `${escape(room.players[room.turn]?.name || '')} 님의 차례`}</b><span>${legal ? '어떤 플레이를 할까요?' : '다음 수를 생각해 보세요.'}</span></div><span class="timer" id="countdown"></span></div>${!legal && canQueue ? queuePanel(me) : `<div class="betting-actions"><button class="fold-button" data-action="fold" ${legal ? disabled : 'disabled'}>폴드</button><button class="primary" data-action="${legal?.canCheck ? 'check' : 'call'}" ${legal ? disabled : 'disabled'}>${!legal ? '콜' : legal.canCheck ? '체크' : `콜 ${format(legal.toCall)}칩`}</button><div class="raise-control"><label for="raise-amount">총 베팅액 (칩)</label><input id="raise-amount" type="number" inputmode="numeric" aria-describedby="raise-preview raise-help" required min="${legal?.min || 0}" max="${legal?.max || 0}" step="1" value="${legal?.min || 0}" ${legal?.canRaise ? disabled : 'disabled'}></div><button class="primary gold" id="raise-button" ${legal?.canRaise ? disabled : 'disabled'}>레이즈 ↑</button></div>${legal?.canRaise ? `<output id="raise-preview" class="raise-preview" for="raise-amount" aria-live="polite"></output><section class="quick-bets" aria-label="베팅 금액 빠른 선택">${raisePresets(room, legal).map((preset, index) => `<button type="button" id="bet-preset-${index}" data-bet="${preset.amount}" ${disabled} title="이번 라운드 총액 ${format(preset.amount)}칩">${preset.label} <b>${format(preset.amount)}</b></button>`).join('')}</section><p id="raise-help" class="raise-help">총액에는 이미 낸 칩이 포함돼요. ½ 팟·팟은 콜을 마친 뒤의 팟을 기준으로 올리며, 가능한 범위 안에서 선택돼요. Enter로 확인 · Esc로 최소 금액 복귀</p>` : ''}`}`}</section>
       <p class="table-footnote">30,000 가상 칩으로 시작 / 블라인드 150 / 300 / 행동 시간 45초 / 결제 및 환전 없음</p>
     </section><aside class="sidebar"><div class="side-tabs" role="tablist" aria-label="테이블 정보"><button role="tab" id="tab-ranking" aria-controls="side-content" tabindex="${panel === 'ranking' ? 0 : -1}" aria-selected="${panel === 'ranking'}" data-panel="ranking">리더보드</button><button role="tab" id="tab-history" aria-controls="side-content" tabindex="${panel === 'history' ? 0 : -1}" aria-selected="${panel === 'history'}" data-panel="history">핸드 기록</button><button role="tab" id="tab-ledger" aria-controls="side-content" tabindex="${panel === 'ledger' ? 0 : -1}" aria-selected="${panel === 'ledger'}" data-panel="ledger">주간 기록</button><button role="tab" id="tab-log" aria-controls="side-content" tabindex="${panel === 'log' ? 0 : -1}" aria-selected="${panel === 'log'}" data-panel="log">진행 로그</button></div><div id="side-content" role="tabpanel" tabindex="0" aria-labelledby="tab-${panel}">${sideContent()}</div></aside></div>`;
   $('#display-preferences').open = preferencesOpen;
+  // The CSP forbids inline style attributes, so seat coordinates are applied through the CSSOM.
+  document.querySelectorAll('[data-seat-pos]').forEach(el => {
+    const [index, count] = el.dataset.seatPos.split(',').map(Number);
+    for (const [name, value] of Object.entries(seatPosition(index, count))) el.style.setProperty(name, value);
+  });
   $('#show-bb').onchange = event => { showBB = event.target.checked; saveLocal('river-show-bb', String(showBB)); render(); };
   $('#four-colour').onchange = event => { fourColour = event.target.checked; saveLocal('river-four-colour', String(fourColour)); render(); };
+  $('#show-queue').onchange = event => { showQueue = event.target.checked; saveLocal('river-show-queue', String(showQueue)); render(); };
+  document.querySelectorAll('[data-queue]').forEach(button => {
+    button.onclick = () => send('queue', { queue: room.queued?.type === button.dataset.queue ? null : { type: button.dataset.queue } });
+  });
   $('#animation-speed').onchange = event => {
     animationSpeed = event.target.value; saveLocal('river-animation-speed', animationSpeed);
     clearTimeout(queueTimer); queueTimer = null;
@@ -509,9 +540,22 @@ function render(preserveLedgerDraft = true) {
   if ($('#turn-announcement').textContent !== announcement) $('#turn-announcement').textContent = announcement;
   countdown();
 }
+function historyEntry(h) {
+  const summary = `<summary><span class="history-title"><b>HAND #${h.hand}</b><time>${new Date(h.at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}</time></span><div class="mini-board">${h.board.map(c => card(c)).join('')}</div>${h.result.map(r => `<p>${escape(r.name)} <strong>+${format(r.amount)}</strong><small>${escape(r.handName)}</small></p>`).join('')}</summary>`;
+  // Hands saved before detailed history only have the result summary.
+  if (!h.players) return `<article class="history-entry">${summary.replace(/<\/?summary>/g, '')}</article>`;
+  const signed = value => `${value > 0 ? '+' : ''}${format(value)}`;
+  const players = h.players.map(p => `<tr><th scope="row">${escape(p.name)}${p.id === room.me ? ' <small>나</small>' : ''}${p.folded ? ' <small>폴드</small>' : ''}<span class="history-cards">${p.cards ? p.cards.map(c => card(c)).join('') : ''}</span></th><td>${format(p.contributed)}${p.refund ? `<small>환급 ${format(p.refund)}</small>` : ''}</td><td>${format(p.end)}<small class="${p.end - p.start < 0 ? 'negative' : 'positive'}">${signed(p.end - p.start)}</small></td></tr>`).join('');
+  const rounds = ['preflop', 'flop', 'turn', 'river'].map(stage => [stage, h.actions.filter(a => a.stage === stage)]).filter(([, list]) => list.length);
+  return `<details class="history-entry" data-hand="${h.hand}" ${openHands.has(String(h.hand)) ? 'open' : ''}>${summary}
+    <table class="history-players"><thead><tr><th scope="col">참가자</th><th scope="col">투입</th><th scope="col">종료 칩</th></tr></thead><tbody>${players}</tbody></table>
+    <ol class="history-actions">${rounds.map(([stage, list]) => `<li><b>${stages[stage]}</b>${list.map(a => `<span>${escape(a.name)} ${escape(a.text)}</span>`).join('')}</li>`).join('')}</ol>
+    <p class="history-privacy">공개되지 않은 상대의 패는 표시하지 않아요.</p>
+  </details>`;
+}
 function sideContent() {
   if (panel === 'log') return `<div class="section-caption">지금까지의 플레이</div><ol class="game-log">${room.log.map(item => `<li>${escape(item)}</li>`).join('')}</ol>`;
-  if (panel === 'history') return `<div class="section-caption">최근 30개 핸드</div>${room.history.length ? room.history.map(h => `<article class="history-entry"><div><b>HAND #${h.hand}</b><time>${new Date(h.at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}</time></div><div class="mini-board">${h.board.map(c => card(c)).join('')}</div>${h.result.map(r => `<p>${escape(r.name)} <strong>+${format(r.amount)}</strong><small>${escape(r.handName)}</small></p>`).join('')}</article>`).join('') : '<div class="empty-state"><span>↺</span><b>첫 핸드를 기다리고 있어요</b><p>완료된 핸드의 결과가 여기에 남아요.</p></div>'}`;
+  if (panel === 'history') return `<div class="section-caption">최근 50개 핸드</div>${room.history.length ? room.history.map(historyEntry).join('') : '<div class="empty-state"><span>↺</span><b>첫 핸드를 기다리고 있어요</b><p>완료된 핸드의 결과가 여기에 남아요.</p></div>'}`;
   if (panel === 'ledger') return ledgerContent();
   return `<div class="section-caption"><span>이 테이블의 누적 순이익</span><span>가상 칩</span></div><ol class="leaderboard">${room.ranking.map((p, i) => `<li><span class="rank-no">${String(i + 1).padStart(2, '0')}</span><span class="rank-name"><b>${escape(p.name)}${p.id === room.me ? ' <small>나</small>' : ''}</b><small>${p.hands}핸드 / ${p.wins}승</small></span><strong class="${p.net < 0 ? 'negative' : ''}">${p.net > 0 ? '+' : ''}${format(p.net)}</strong></li>`).join('')}</ol><p class="ranking-note">정산된 칩 순이익 순으로 정렬해요. 충전한 칩은 순이익에 포함하지 않으며, 팟을 나눠 가져도 승수에 포함합니다.</p>${!room.ranking.some(p => p.hands) ? '<div class="empty-state"><span>♠</span><b>첫 승의 주인공은 누구일까요?</b><p>첫 핸드가 끝나면 전적이 기록돼요.</p></div>' : ''}`;
 }

@@ -1,5 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
-import { createRoom, addPlayer, startHand, act, publicRoom, legalActions, weekKey, STARTING_CHIPS, migrateChipUnit } from './poker.js';
+import { createRoom, addPlayer, startHand, act, setQueued, publicRoom, legalActions, weekKey, STARTING_CHIPS, migrateChipUnit } from './poker.js';
 
 const json = (data, status = 200, headers = {}) => Response.json(data, { status, headers: { 'Cache-Control': 'no-store', ...headers } });
 const cleanName = (value, fallback) => typeof value === 'string' ? value.trim().replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 20) || fallback : fallback;
@@ -92,8 +92,8 @@ export class PokerRoom extends DurableObject {
       try { ws.send(JSON.stringify({ type: 'state', room: publicRoom(this.room, ws.deserializeAttachment().id, this.online()) })); } catch { /* Closed connections are removed by the runtime. */ }
     }
   }
-  async save() {
-    this.room.revision++;
+  async save(bump = true) {
+    if (bump) this.room.revision++;
     await this.ctx.storage.put('room', this.room);
     if (this.room.deadline) await this.ctx.storage.setAlarm(this.room.deadline);
     else await this.ctx.storage.deleteAlarm();
@@ -264,8 +264,9 @@ export class PokerRoom extends DurableObject {
         const data = JSON.parse(message);
         const player = this.room.players.find(p => p.id === session.id);
         if (!player) throw new Error('방에 다시 입장해 주세요.');
-        if (data.revision !== this.room.revision) throw new Error('테이블이 갱신되었습니다. 다시 선택해 주세요.');
-        if (this.room.deadline && Date.now() >= this.room.deadline) throw new Error('행동 시간이 지났습니다. 테이블 갱신을 기다려 주세요.');
+        // Queued actions are re-validated when they run, so they do not need the latest revision.
+        if (data.type !== 'queue' && data.revision !== this.room.revision) throw new Error('테이블이 갱신되었습니다. 다시 선택해 주세요.');
+        if (data.type !== 'queue' && this.room.deadline && Date.now() >= this.room.deadline) throw new Error('행동 시간이 지났습니다. 테이블 갱신을 기다려 주세요.');
         const idle = ['waiting', 'finished'].includes(this.room.stage);
         if (data.type === 'ready') {
           if (!idle || player.chips <= 0) throw new Error('다음 핸드 대기 중에 준비할 수 있습니다.');
@@ -311,8 +312,10 @@ export class PokerRoom extends DurableObject {
           if (index < 0) throw new Error('삭제할 세션 기록을 찾을 수 없습니다.');
           this.room.ledger.splice(index, 1);
         } else if (data.type === 'action') act(this.room, session.id, data.action, data.amount);
+        else if (data.type === 'queue') setQueued(this.room, session.id, data.queue ?? null);
         else throw new Error('알 수 없는 요청입니다.');
-        await this.save();
+        // A private queue change must not invalidate the acting player's pending command.
+        await this.save(data.type !== 'queue');
         if (data.type === 'ledgerSave' || data.type === 'ledgerDelete') {
           try { await this.syncLeaderboard(); } catch { /* The next table connection will retry the shared ranking sync. */ }
         }

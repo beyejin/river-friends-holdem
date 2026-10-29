@@ -1,6 +1,7 @@
 export const HAND_NAMES = ['하이 카드', '원 페어', '투 페어', '트리플', '스트레이트', '플러시', '풀 하우스', '포 카드', '스트레이트 플러시'];
 export const STARTING_CHIPS = 30000;
 export const LEDGER_START_CHIPS = STARTING_CHIPS;
+export const HISTORY_LIMIT = 50;
 
 export function weekKey(timestamp) {
   const date = new Date(timestamp + 9 * 60 * 60 * 1000);
@@ -116,11 +117,16 @@ export function startHand(room, id, deck = shuffledDeck()) {
     p.bet = 0; p.total = 0; p.actedAt = null; p.startChips = p.chips; p.lastAction = p.active ? '' : '쉬는 중';
     if (p.active) { p.cards = [room.deck.pop(), room.deck.pop()]; }
   }
+  for (const p of room.players) delete p.queued;
   room.dealer = next(room, room.dealer, p => p.active);
   room.sb = participants.length === 2 ? room.dealer : next(room, room.dealer, p => p.active);
   room.bb = next(room, room.sb, p => p.active);
   pay(room, room.players[room.sb], room.smallBlind);
   pay(room, room.players[room.bb], room.bigBlind);
+  room.actions = [
+    { stage: 'preflop', name: room.players[room.sb].name, text: `스몰 블라인드 ${room.players[room.sb].bet}` },
+    { stage: 'preflop', name: room.players[room.bb].name, text: `빅 블라인드 ${room.players[room.bb].bet}` },
+  ];
   log(room, `핸드 #${room.hand} 시작. 블라인드 ${room.smallBlind} / ${room.bigBlind}`);
   progress(room, room.bb);
 }
@@ -156,8 +162,34 @@ export function act(room, id, action, amount) {
     p.lastAction = p.chips === 0 ? '올인' : `레이즈 ${amount}`;
   } else throw new Error('알 수 없는 행동입니다.');
   p.actedAt = room.bet;
+  delete p.queued;
+  room.actions?.push({ stage: room.stage, name: p.name, text: p.lastAction });
   log(room, `${p.name}: ${p.lastAction}`);
   progress(room, room.turn);
+}
+
+export const QUEUE_TYPES = ['fold', 'checkFold', 'check', 'call'];
+
+// A private pre-selected action. It runs when the turn arrives and expires with the betting round.
+export function setQueued(room, id, queued) {
+  const p = room.players.find(q => q.id === id);
+  if (!p || !canAct(p) || ['waiting', 'finished'].includes(room.stage)) throw new Error('진행 중인 핸드에 참여할 때만 미리 선택할 수 있습니다.');
+  if (room.players[room.turn] === p) throw new Error('지금 내 차례예요. 바로 행동해 주세요.');
+  if (queued === null) { delete p.queued; return; }
+  if (!QUEUE_TYPES.includes(queued?.type)) throw new Error('미리 선택할 행동을 확인해 주세요.');
+  const toCall = Math.min(Math.max(0, room.bet - p.bet), p.chips);
+  if (queued.type === 'check' && toCall > 0) throw new Error('맞춰야 할 베팅이 있어 체크를 미리 선택할 수 없습니다.');
+  if (queued.type === 'call' && toCall === 0) throw new Error('맞출 베팅이 없어요. 체크를 선택해 주세요.');
+  p.queued = { type: queued.type, stage: room.stage, ...(queued.type === 'call' ? { cap: toCall } : {}) };
+}
+
+function queuedAction(room, p) {
+  const legal = legalActions(room, p.id);
+  const { type, cap } = p.queued;
+  if (type === 'fold') return 'fold';
+  if (type === 'checkFold') return legal.canCheck ? 'check' : 'fold';
+  if (type === 'check') return legal.canCheck ? 'check' : null;
+  return !legal.canCheck && legal.toCall <= cap ? 'call' : null;
 }
 
 function progress(room, from) {
@@ -167,21 +199,30 @@ function progress(room, from) {
   if (actors.length === 1) room.bet = Math.max(...live.map(p => p.bet));
   const needsAction = p => canAct(p) && (p.bet < room.bet || (p.actedAt === null && actors.length > 1));
   const turn = next(room, from, needsAction);
-  if (turn !== -1) { setTurn(room, turn); return; }
+  if (turn !== -1) {
+    setTurn(room, turn);
+    const p = room.players[turn];
+    if (p.queued) {
+      const action = queuedAction(room, p);
+      delete p.queued;
+      if (action) act(room, p.id, action);
+    }
+    return;
+  }
   if (room.stage === 'river') { settle(room, true); return; }
   const nextStage = { preflop: 'flop', flop: 'turn', turn: 'river' }[room.stage];
   room.stage = nextStage;
   room.deck.pop(); // Burn one card before each board reveal.
   for (let i = 0; i < (nextStage === 'flop' ? 3 : 1); i++) room.board.push(room.deck.pop());
   room.bet = 0; room.minRaise = room.bigBlind;
-  for (const p of room.players) { p.bet = 0; p.actedAt = null; if (canAct(p)) p.lastAction = ''; }
+  for (const p of room.players) { p.bet = 0; p.actedAt = null; delete p.queued; if (canAct(p)) p.lastAction = ''; }
   log(room, `${{ flop: '플롭', turn: '턴', river: '리버' }[nextStage]} 공개`);
   progress(room, room.dealer);
 }
 
 export function settle(room, showdown) {
   const live = room.players.filter(playing);
-  const awards = new Map();
+  const awards = new Map(), refunds = new Map();
   const ranks = new Map(live.map(p => [p.id, showdown ? evaluate([...p.cards, ...room.board]) : { score: 0, name: '모두 폴드' }]));
   const levels = [...new Set(room.players.map(p => p.total).filter(Boolean))].sort((a, b) => a - b);
   let previous = 0;
@@ -189,7 +230,7 @@ export function settle(room, showdown) {
     const contributors = room.players.filter(p => p.total >= level);
     const amount = (level - previous) * contributors.length; previous = level;
     // An unmatched top contribution is returned, even if its owner folded.
-    if (contributors.length === 1) { contributors[0].chips += amount; continue; }
+    if (contributors.length === 1) { contributors[0].chips += amount; refunds.set(contributors[0].id, (refunds.get(contributors[0].id) || 0) + amount); continue; }
     const eligible = live.filter(p => p.total >= level);
     if (!eligible.length) throw new Error('팟 정산 상태가 올바르지 않습니다.');
     const best = Math.max(...eligible.map(p => ranks.get(p.id).score));
@@ -208,8 +249,12 @@ export function settle(room, showdown) {
     p.ready = false;
   }
   room.showdown = showdown;
-  room.history.unshift({ hand: room.hand, result: room.result, board: [...room.board], at: Date.now() });
-  room.history = room.history.slice(0, 30);
+  room.history.unshift({ hand: room.hand, result: room.result, board: [...room.board], at: Date.now(), actions: room.actions || [],
+    players: room.players.filter(p => p.active).map(p => ({ id: p.id, name: p.name, start: p.startChips, contributed: p.total, refund: refunds.get(p.id) || 0,
+      end: p.chips, won: awards.get(p.id) || 0, folded: p.folded, cards: [...p.cards], revealed: showdown && playing(p) })) });
+  room.history = room.history.slice(0, HISTORY_LIMIT);
+  room.actions = [];
+  for (const p of room.players) delete p.queued;
   room.stage = 'finished'; room.pot = 0; setTurn(room, -1);
   log(room, room.result.map(r => `${r.name} +${r.amount} (${r.handName})`).join(' / '));
 }
@@ -230,7 +275,10 @@ export function publicRoom(room, id, online = []) {
   return {
     id: room.id, name: room.name, hostId: room.hostId, stage: room.stage, board: room.board, dealer: room.dealer,
     sb: room.sb, bb: room.bb, turn: room.turn, hand: room.hand, bet: room.bet, smallBlind: room.smallBlind,
-    bigBlind: room.bigBlind, pot: room.pot, log: room.log, result: room.result, history: room.history,
+    bigBlind: room.bigBlind, pot: room.pot, log: room.log, result: room.result,
+    // Hand history keeps every hole card; only showdown hands and the viewer's own cards leave the server.
+    history: room.history.map(hand => ({ ...hand, players: hand.players?.map(({ cards, revealed, ...p }) => ({ ...p, cards: revealed || p.id === id ? cards : null })) })),
+    queued: room.players.find(p => p.id === id)?.queued || null,
     revision: room.revision, deadline: room.deadline, me: id, legal: legalActions(room, id),
     players: room.players.map(p => ({ id: p.id, name: p.name, chips: p.chips, bet: p.bet, ready: p.ready, active: p.active,
       folded: p.folded, lastAction: p.lastAction, online: online.includes(p.id),

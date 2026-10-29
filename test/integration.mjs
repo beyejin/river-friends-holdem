@@ -63,12 +63,25 @@ try {
   a.ws.close(); await delay(100); a.room=null; await connect(a,code);
   assert.equal(JSON.stringify(a.room.ranking),expected);
   assert.equal(a.room.history.length,1);
+  // A private queued fold runs on the server when the turn arrives and does not bump the shared revision.
+  await send(a,'ready'); await send(b,'ready'); await send(a,'start');
+  await until(()=>a.room.hand===2&&b.room.hand===2&&a.room.revision===b.room.revision);
+  const actor=players.find(p=>p.room.legal), waiter=players.find(p=>p!==actor);
+  const before=waiter.room.revision;
+  await delay(175); waiter.ws.send(JSON.stringify({type:'queue',revision:0,queue:{type:'fold'}}));
+  await until(()=>waiter.room.queued?.type==='fold');
+  assert.equal(waiter.room.revision,before); assert.equal(actor.room.queued,null); assert.deepEqual(waiter.errors,[]);
+  await send(actor,'action',{action:'call'});
+  await until(()=>a.room.stage==='finished'&&b.room.stage==='finished');
+  assert.equal(a.room.history[0].actions.at(-1).text,'폴드');
+  assert.equal(a.room.history[0].players.find(p=>p.id===waiter.room.me).folded,true);
+  assert.equal(a.room.players.reduce((s,p)=>s+p.chips,0),60000);
   // Rejoining with the same browser identity must not create another seat.
   await post(`/api/rooms/${code}/join`,{nickname:a.name},a.cookie);
   await until(()=>a.room.players.length===2);
   await send(a,'leave'); await until(()=>b.room.players.length===1);
   assert.equal(b.room.hostId,b.room.me);
-  console.log('PASS: authentication, origin checks, two-player WebSocket sync, hidden cards, stale actions, full hand, chip conservation, ranking, reconnect and host transfer');
+  console.log('PASS: authentication, origin checks, two-player WebSocket sync, hidden cards, stale actions, full hand, chip conservation, ranking, reconnect, queued actions, hand history and host transfer');
 } finally {
   for(const p of players) p.ws?.close();
 }

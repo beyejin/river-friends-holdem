@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluate, shuffledDeck, createRoom, addPlayer, startHand, act, publicRoom, legalActions, settle } from '../src/poker.js';
+import { evaluate, shuffledDeck, createRoom, addPlayer, startHand, act, setQueued, publicRoom, legalActions, settle } from '../src/poker.js';
 
 const c = (rank, suit = 0) => suit * 13 + rank - 2;
 function setup(stacks = [2000, 2000]) {
@@ -131,4 +131,66 @@ test('500개 무작위 핸드에서 칩 보존, 유효 차례, 종료를 유지�
     assert.equal(room.stage,'finished');
     assert.equal(Object.values(room.records).reduce((s,r)=>s+r.net,0),0);
   }
+});
+test('예약 체크/폴드는 차례가 오면 체크하고, 베팅이 있으면 폴드한다', () => {
+  const room = setup([2000,2000,2000]);
+  // p0 acts first preflop; the big blind (p2) can still check after calls.
+  setQueued(room,'p2',{ type:'checkFold' });
+  assert.equal(publicRoom(room,'p2').queued.type,'checkFold');
+  assert.equal(publicRoom(room,'p0').queued,null);
+  act(room,'p0','call'); act(room,'p1','call');
+  assert.equal(room.stage,'flop'); assert.equal(room.players[2].lastAction,'');
+  assert.equal(room.actions.at(-1).text,'체크');
+  // Flop: p1 acts first. p2 queues check/fold, then p1 bets, so p2 folds automatically.
+  setQueued(room,'p2',{ type:'checkFold' });
+  act(room,'p1','raise',100);
+  assert.equal(room.players[2].folded,true);
+  assert.equal(room.players[2].queued,undefined);
+});
+test('예약 체크는 베팅이 생기면 실행되지 않고, 예약 콜은 상한을 넘으면 취소된다', () => {
+  const room = setup([2000,2000,2000]);
+  setQueued(room,'p1',{ type:'call' });
+  assert.equal(room.players[1].queued.cap,10);
+  act(room,'p0','raise',60);
+  assert.equal(room.turn,1); assert.equal(room.players[1].queued,undefined);
+  assert.equal(room.players[1].folded,false);
+  act(room,'p1','call');
+  setQueued(room,'p0',{ type:'check' });
+  act(room,'p2','call');
+  assert.equal(room.stage,'flop');
+  assert.equal(room.players[0].queued,undefined, '라운드가 끝나면 예약이 사라진다');
+});
+test('예약 콜은 금액이 같으면 실행되고, 내 차례나 잘못된 예약은 거부한다', () => {
+  const room = setup([2000,2000,2000]);
+  assert.throws(()=>setQueued(room,'p0',{ type:'fold' }),/내 차례/);
+  assert.throws(()=>setQueued(room,'p2',{ type:'call' }),/맞출 베팅/);
+  assert.throws(()=>setQueued(room,'p1',{ type:'check' }),/체크/);
+  assert.throws(()=>setQueued(room,'p1',{ type:'allin' }),/확인/);
+  setQueued(room,'p2',{ type:'fold' }); setQueued(room,'p2',null);
+  assert.equal(room.players[2].queued,undefined);
+  setQueued(room,'p1',{ type:'call' });
+  act(room,'p0','call');
+  assert.equal(room.players[1].lastAction,'콜 10');
+  assert.equal(room.turn,2);
+});
+test('핸드 기록은 행동, 기여, 종료 칩, 환급을 남기고 비공개 패를 숨긴다', () => {
+  const room = setup([2000,2000]);
+  act(room,'p0','raise',500); act(room,'p1','fold');
+  const hand = room.history[0];
+  assert.deepEqual(hand.actions.map(a => a.text),['스몰 블라인드 10','빅 블라인드 20','레이즈 500','폴드']);
+  const p0 = hand.players.find(p => p.id === 'p0');
+  assert.equal(p0.contributed,500); assert.equal(p0.refund,480); assert.equal(p0.won,40); assert.equal(p0.end,2020);
+  assert.equal(room.records.p0.wins,1);
+  const view = publicRoom(room,'p1').history[0].players;
+  assert.ok(view.find(p => p.id === 'p1').cards.every(Number.isInteger), '내 폴드 패는 나에게 보인다');
+  assert.equal(view.find(p => p.id === 'p0').cards,null);
+});
+test('환급만 받은 플레이어는 승수에 포함하지 않고 기록은 50핸드까지 보관한다', () => {
+  const room = setup([2000,2000]);
+  room.board=[c(2),c(5,1),c(8,2),c(10,3),c(3)];
+  room.players.forEach((p,i)=>{p.total=i?1000:300;p.chips=2000-p.total;p.startChips=2000;p.cards=i?[c(4),c(4,1)]:[c(14),c(14,1)];});
+  room.pot=1300; settle(room,true);
+  assert.equal(room.records.p1.wins,0); assert.equal(room.history[0].players[1].refund,700);
+  for (let i = 0; i < 60; i++) { room.players.forEach(p => { p.ready = true; p.chips = 2000; }); startHand(room,room.hostId); act(room,room.players[room.turn].id,'fold'); }
+  assert.equal(room.history.length,50);
 });
