@@ -1,5 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
-import { createRoom, addPlayer, startHand, act, setQueued, publicRoom, legalActions, weekKey, STARTING_CHIPS, migrateChipUnit } from './poker.js';
+import { createRoom, addPlayer, startHand, act, setQueued, publicRoom, legalActions, weekKey, LEGACY_CHIPS, migrateChipUnit } from './poker.js';
 
 const json = (data, status = 200, headers = {}) => Response.json(data, { status, headers: { 'Cache-Control': 'no-store', ...headers } });
 const cleanName = (value, fallback) => typeof value === 'string' ? value.trim().replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 20) || fallback : fallback;
@@ -160,7 +160,7 @@ export class PokerRoom extends DurableObject {
           const scores = new Map(members.filter(member => !deleted.has(member.key)).map(member => [member.key, emptyScore(member)]));
           const currentWeek = weekKey(Date.now());
           for (const sessions of [...Object.values(rooms), manualSessions]) for (const session of sessions) {
-            const results = session.players.map(player => ({ player, net: Number.isSafeInteger(player.finalChips) ? player.finalChips - STARTING_CHIPS * (1 + player.rebuys) : 0 }));
+            const results = session.players.map(player => ({ player, net: Number.isSafeInteger(player.finalChips) ? player.finalChips - (session.startChips ?? LEGACY_CHIPS) * (1 + player.rebuys) : 0 }));
             const best = Math.max(...results.map(result => result.net));
             for (const { player, net } of results) {
               const member = memberForPlayer(player, members) || { key: player.memberKey || `legacy:${player.name}`, name: player.name, cohort: player.cohort };
@@ -277,7 +277,7 @@ export class PokerRoom extends DurableObject {
           startHand(this.room, session.id);
         } else if (data.type === 'rebuy') {
           if (!idle || player.chips > 0) throw new Error('칩을 모두 사용한 뒤 대기 중에 충전할 수 있습니다.');
-          player.chips = STARTING_CHIPS; player.ready = false;
+          player.chips = this.room.chipUnit; player.ready = false;
         } else if (data.type === 'leave') {
           if (!idle) throw new Error('현재 핸드가 끝난 뒤 나갈 수 있습니다.');
           const dealerId = this.room.players[this.room.dealer]?.id;
@@ -303,7 +303,7 @@ export class PokerRoom extends DurableObject {
             const previous = existing?.players.find(player => player.id === entry.id);
             return { ...previous, id: entry.id, name: record.name, ...(record.memberKey ? { memberKey: record.memberKey, cohort: record.cohort } : {}), rebuys: entry.rebuys, finalChips: entry.finalChips };
           });
-          const entry = { ...existing, id: existing?.id || crypto.randomUUID(), date: data.date, at, week: weekKey(at), players };
+          const entry = { ...existing, id: existing?.id || crypto.randomUUID(), date: data.date, at, week: weekKey(at), startChips: this.room.chipUnit, players };
           if (existing) this.room.ledger[this.room.ledger.indexOf(existing)] = entry;
           else this.room.ledger.unshift(entry);
         } else if (data.type === 'ledgerDelete') {

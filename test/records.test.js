@@ -203,8 +203,8 @@ test('기존 Durable Object 데이터와 회원별 기록을 보존한다', asyn
     assert.equal((await call(currentRoom, '/join', { nickname: '한예진', memberKey: registered[0].key }, 'new-b')).status, 200);
     const room = (await snapshot(currentRoom)).room;
     assert.equal(room.players[0].name, '한예진');
-    assert.equal(room.players[0].chips, 30000);
-    assert.equal(room.players[1].chips, 30000);
+    assert.equal(room.players[0].chips, 20000);
+    assert.equal(room.players[1].chips, 20000);
     assert.equal(room.records['new-a'].memberKey, 'default:한예진');
     assert.equal(room.records['new-b'].memberKey, registered[0].key);
     assert.equal((await call(currentRoom, '/join', { nickname: '한예진', memberKey: registered[0].key }, 'new-a')).status, 400);
