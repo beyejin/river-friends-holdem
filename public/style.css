@@ -542,3 +542,8 @@ details.history-entry[open] .history-title b::after{content:" ▾"}
 .history-actions span{display:inline-block;margin-right:.75rem;color:var(--text)}
 .history-privacy{margin:.5rem 0 0!important;font-size:12px!important;color:var(--text-muted)}
 @media(forced-colors:active){.queue-option[aria-pressed=true]{border:2px solid Highlight}.table-bet{border:1px solid CanvasText}}
+
+/* Bug report and repository links on the home footer and under the table. */
+.project-links{display:flex;flex-wrap:wrap;gap:8px}
+.project-links a{display:inline-flex;align-items:center;min-height:44px;padding:10px 14px;border-radius:7px;font-size:13px;font-weight:650}
+.play-area .project-links{grid-column:1/-1;justify-content:center;margin:0 0 16px}

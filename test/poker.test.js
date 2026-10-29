@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluate, shuffledDeck, createRoom, addPlayer, startHand, act, setQueued, publicRoom, legalActions, settle } from '../src/poker.js';
+import { evaluate, shuffledDeck, createRoom, addPlayer, startHand, act, setQueued, publicRoom, legalActions, settle, migrateChipUnit } from '../src/poker.js';
 
 const c = (rank, suit = 0) => suit * 13 + rank - 2;
 function setup(stacks = [2000, 2000]) {
@@ -9,11 +9,12 @@ function setup(stacks = [2000, 2000]) {
   stacks.forEach((chips, i) => { addPlayer(room, `p${i}`, `친구${i}`); room.players[i].chips = chips; room.players[i].ready = true; });
   startHand(room, 'p0'); return room;
 }
-test('새 테이블은 1인당 30,000칩으로 최대 9명까지 입장한다', () => {
+test('새 테이블은 1인당 20,000칩, 블라인드 100/200으로 최대 9명까지 입장한다', () => {
   const room = createRoom('capacity', 'p0', '정원 검증');
   for (let index = 0; index < 9; index++) addPlayer(room, `p${index}`, `참가자${index}`);
   assert.equal(room.players.length, 9);
-  assert.ok(room.players.every(player => player.chips === 30000));
+  assert.ok(room.players.every(player => player.chips === 20000));
+  assert.deepEqual([room.smallBlind, room.bigBlind, room.minRaise], [100, 200, 200]);
   assert.throws(() => addPlayer(room, 'p9', '열 번째 참가자'), /정원이 가득/);
   assert.equal(room.players.length, 9);
   assert.equal(room.records.p9, undefined);
@@ -193,4 +194,23 @@ test('환급만 받은 플레이어는 승수에 포함하지 않고 기록은 5
   assert.equal(room.records.p1.wins,0); assert.equal(room.history[0].players[1].refund,700);
   for (let i = 0; i < 60; i++) { room.players.forEach(p => { p.ready = true; p.chips = 2000; }); startHand(room,room.hostId); act(room,room.players[room.turn].id,'fold'); }
   assert.equal(room.history.length,50);
+});
+
+test('기존 30,000칩 테이블과 지난 장부 기록은 30,000 기준을 유지한다', () => {
+  const room = createRoom('legacy', 'p0', '기존 테이블');
+  Object.assign(room, { chipUnit: 30000, smallBlind: 150, bigBlind: 300, minRaise: 300 });
+  assert.equal(migrateChipUnit(room), false);
+  addPlayer(room, 'p0', '가'); addPlayer(room, 'p1', '나');
+  assert.deepEqual(room.players.map(p => p.chips), [30000, 30000]);
+  assert.deepEqual([room.smallBlind, room.bigBlind], [150, 300]);
+  room.ledger = [
+    { id: 'old', week: 'x', players: [{ id: 'p0', rebuys: 0, finalChips: 40000 }, { id: 'p1', rebuys: 0, finalChips: 20000 }] },
+    { id: 'new', week: 'x', startChips: 20000, players: [{ id: 'p0', rebuys: 0, finalChips: 25000 }, { id: 'p1', rebuys: 0, finalChips: 15000 }] },
+  ];
+  const ranking = publicRoom(room, 'p0').ledgerRanking;
+  assert.deepEqual(ranking.map(r => [r.id, r.net]), [['p0', 15000], ['p1', -15000]]);
+  const unmigrated = createRoom('older', 'p0', '오래된 테이블');
+  delete unmigrated.chipUnit; Object.assign(unmigrated, { smallBlind: 10, bigBlind: 20, minRaise: 20 });
+  assert.equal(migrateChipUnit(unmigrated), true);
+  assert.deepEqual([unmigrated.chipUnit, unmigrated.smallBlind, unmigrated.bigBlind], [30000, 150, 300]);
 });

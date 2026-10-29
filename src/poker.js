@@ -1,6 +1,7 @@
 export const HAND_NAMES = ['하이 카드', '원 페어', '투 페어', '트리플', '스트레이트', '플러시', '풀 하우스', '포 카드', '스트레이트 플러시'];
-export const STARTING_CHIPS = 30000;
-export const LEDGER_START_CHIPS = STARTING_CHIPS;
+export const STARTING_CHIPS = 20000;
+// Tables and ledger records created before the 20,000-chip start keep their 30,000-chip unit.
+export const LEGACY_CHIPS = 30000;
 export const HISTORY_LIMIT = 50;
 
 export function weekKey(timestamp) {
@@ -51,13 +52,13 @@ export function evaluate(cards) {
 }
 
 export function createRoom(id, hostId, name) {
-  return { id, name, hostId, chipUnit: STARTING_CHIPS, players: [], records: {}, ledger: [], stage: 'waiting', board: [], deck: [], dealer: -1, turn: -1, hand: 0, bet: 0, minRaise: 300, smallBlind: 150, bigBlind: 300, pot: 0, log: [], result: [], history: [], revision: 0, deadline: null };
+  return { id, name, hostId, chipUnit: STARTING_CHIPS, players: [], records: {}, ledger: [], stage: 'waiting', board: [], deck: [], dealer: -1, turn: -1, hand: 0, bet: 0, minRaise: 200, smallBlind: 100, bigBlind: 200, pot: 0, log: [], result: [], history: [], revision: 0, deadline: null };
 }
 
 export function migrateChipUnit(room) {
   room.ledger ||= [];
-  if (room.chipUnit === STARTING_CHIPS) return false;
-  const scale = STARTING_CHIPS / (room.chipUnit || 2000);
+  if ([STARTING_CHIPS, LEGACY_CHIPS].includes(room.chipUnit)) return false;
+  const scale = LEGACY_CHIPS / (room.chipUnit || 2000);
   const scaleValue = value => Number.isFinite(value) ? value * scale : value;
   for (const player of room.players) {
     for (const key of ['chips', 'bet', 'total', 'startChips']) if (player[key] !== undefined) player[key] = scaleValue(player[key]);
@@ -71,7 +72,7 @@ export function migrateChipUnit(room) {
     .replace(/(블라인드 )(\d+)( \/ )(\d+)/, (_, prefix, small, divider, big) => `${prefix}${scaleValue(Number(small))}${divider}${scaleValue(Number(big))}`)
     .replace(/: (콜|레이즈) (\d+)$/, (_, action, amount) => `: ${action} ${scaleValue(Number(amount))}`)
     .replace(/\+(\d+)(?= \()/g, (_, amount) => `+${scaleValue(Number(amount))}`));
-  room.chipUnit = STARTING_CHIPS;
+  room.chipUnit = LEGACY_CHIPS;
   room.revision++;
   return true;
 }
@@ -84,7 +85,7 @@ export function addPlayer(room, id, name) {
   if (!room.records[id] && Object.keys(room.records).length >= 100) throw new Error('이 방의 참가 기록이 가득 찼습니다. 새 방을 만들어 주세요.');
   room.records[id] ||= { id, name, hands: 0, wins: 0, net: 0 };
   room.records[id].name = name;
-  room.players.push({ id, name, chips: STARTING_CHIPS, cards: [], folded: false, active: false, bet: 0, total: 0, actedAt: null, ready: false, lastAction: '대기 중' });
+  room.players.push({ id, name, chips: room.chipUnit, cards: [], folded: false, active: false, bet: 0, total: 0, actedAt: null, ready: false, lastAction: '대기 중' });
   if (!room.players.some(p => p.id === room.hostId)) room.hostId = id;
   log(room, `${name} 님이 입장했습니다.`);
 }
@@ -263,17 +264,17 @@ export function publicRoom(room, id, online = []) {
   const currentWeek = weekKey(Date.now());
   const ledgerRanking = Object.values(room.records).map(record => {
     const sessions = room.ledger.filter(entry => entry.players.some(player => player.id === record.id));
-    const net = player => player.finalChips - LEDGER_START_CHIPS * (1 + player.rebuys);
+    const net = (entry, player) => player.finalChips - (entry.startChips ?? LEGACY_CHIPS) * (1 + player.rebuys);
     const weeklyWins = room.ledger.filter(entry => entry.week === currentWeek && (() => {
-      const scores = entry.players.map(net);
+      const scores = entry.players.map(player => net(entry, player));
       const best = Math.max(...scores);
-      return entry.players.some(player => player.id === record.id && net(player) === best);
+      return entry.players.some(player => player.id === record.id && net(entry, player) === best);
     })()).length;
-    return { id: record.id, name: record.name, weeklyWins, net: sessions.reduce((sum, entry) => sum + net(entry.players.find(player => player.id === record.id)), 0), finalChips: sessions.reduce((sum, entry) => sum + entry.players.find(player => player.id === record.id).finalChips, 0) };
+    return { id: record.id, name: record.name, weeklyWins, net: sessions.reduce((sum, entry) => sum + net(entry, entry.players.find(player => player.id === record.id)), 0), finalChips: sessions.reduce((sum, entry) => sum + entry.players.find(player => player.id === record.id).finalChips, 0) };
   }).filter(record => room.ledger.some(entry => entry.players.some(player => player.id === record.id)))
     .sort((a, b) => b.weeklyWins - a.weeklyWins || b.net - a.net || b.finalChips - a.finalChips);
   return {
-    id: room.id, name: room.name, hostId: room.hostId, stage: room.stage, board: room.board, dealer: room.dealer,
+    id: room.id, name: room.name, hostId: room.hostId, chipUnit: room.chipUnit, stage: room.stage, board: room.board, dealer: room.dealer,
     sb: room.sb, bb: room.bb, turn: room.turn, hand: room.hand, bet: room.bet, smallBlind: room.smallBlind,
     bigBlind: room.bigBlind, pot: room.pot, log: room.log, result: room.result,
     // Hand history keeps every hole card; only showdown hands and the viewer's own cards leave the server.
