@@ -498,3 +498,47 @@ select,.entry-form select{appearance:none;-webkit-appearance:none;padding-left:1
 .game[data-animation=instant] .card.reveal,.game[data-animation=instant] .seat.acted .player-state,.game[data-animation=instant] .seat.just-won .player-info{animation:none}
 @media(max-width:680px){.display-options{gap:0 .75rem}.display-options label:last-child{width:100%}.display-options select{flex:1}}
 @media(forced-colors:active){.four-colour .card.suit-2,.four-colour .card.suit-3{color:CanvasText}}
+
+/* Table layout: seats spread evenly around the felt by player count, bets sit on the felt in front of each seat. */
+.table-bet{display:none}
+@media(min-width:681px) and (min-height:501px){
+  .poker-surface .seat{left:var(--sx);top:var(--sy)}
+  .seat .seat-bet{display:none}
+  .table-bet{position:absolute;left:var(--bx);top:var(--by);transform:translate(-50%,-50%);z-index:1;display:inline-flex;align-items:center;gap:.4rem;padding:.3rem .65rem .3rem .35rem;border-radius:999px;background:var(--rail);color:var(--brass-light);font-size:.85rem;font-weight:650;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .table-bet i{width:1rem;height:1rem;border-radius:50%;background:var(--brass);border:3px dotted var(--ivory)}
+}
+
+/* Pre-selected actions replace the disabled betting buttons while waiting for the turn. */
+.queue-panel{display:grid;gap:.6rem}
+.queue-options{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px}
+.queue-option{min-height:48px;background:transparent;border:1px solid var(--line);color:var(--text)}
+.queue-option:hover{background:var(--surface-2)}
+.queue-option[aria-pressed=true]{background:var(--brass);border-color:var(--brass);color:var(--on-brass)}
+.queue-option[aria-pressed=true]::before{content:"✓ "}
+.queue-fold[aria-pressed=false]{color:var(--danger)}
+.queue-note{margin:0;font-size:.85rem;line-height:1.6;color:var(--text-muted)}
+@media(max-width:680px){.queue-options{gap:6px}.queue-option{padding:10px 6px;font-size:14px}}
+
+/* Expandable hand history. */
+details.history-entry summary{list-style:none;cursor:pointer}
+details.history-entry summary::-webkit-details-marker{display:none}
+details.history-entry summary:focus-visible{outline:2px solid var(--brass);outline-offset:2px}
+.history-title{display:flex;justify-content:space-between;align-items:baseline;font-size:14px}
+details.history-entry .history-title b::after{content:" ▸";color:var(--text-muted)}
+details.history-entry[open] .history-title b::after{content:" ▾"}
+.history-players{width:100%;margin-top:.75rem;border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums}
+.history-players th,.history-players td{padding:.5rem 0;border-top:1px solid var(--line);text-align:right;vertical-align:top}
+.history-players thead th{color:var(--text-muted);font-weight:500;font-size:12px}
+.history-players th[scope=row],.history-players thead th:first-child{text-align:left;font-weight:600}
+.history-players small{display:block;font-size:11px;color:var(--text-muted);font-weight:400}
+.history-players th small{display:inline}
+.history-players small.positive{color:var(--positive)}.history-players small.negative{color:var(--danger)}
+.history-cards{display:flex;gap:3px;margin-top:4px}
+.history-cards .card{width:22px;height:30px;padding:2px 3px;font-size:11px;border-radius:3px}
+.history-cards .card span{font-size:11px}
+.history-actions{list-style:none;margin:.75rem 0 0;padding:0;font-size:13px;line-height:1.6}
+.history-actions li{padding:.4rem 0;border-top:1px solid var(--line)}
+.history-actions b{display:block;font-size:12px;color:var(--brass-light);font-weight:600}
+.history-actions span{display:inline-block;margin-right:.75rem;color:var(--text)}
+.history-privacy{margin:.5rem 0 0!important;font-size:12px!important;color:var(--text-muted)}
+@media(forced-colors:active){.queue-option[aria-pressed=true]{border:2px solid Highlight}.table-bet{border:1px solid CanvasText}}
